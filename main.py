@@ -18,16 +18,19 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 # ----------------------------
 # Configuration and Initialization
 # ----------------------------
-
-load_dotenv()
+# OPENAI_API_KEY=Your_VSEGPT_API_Key_Here
+# OPENAI_API_BASE=https://api.vsegpt.ru/v1
+# MODEL_ID=vis-google/gemini-flash-1.5
+#
+# # Дополнительные параметры
+# BATCH_SIZE=10
+# MAX_CONCURRENT_OCR_REQUESTS=5
 
 
 class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
-    AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT")
-    OPENAI_DEPLOYMENT_ID: str = os.getenv("OPENAI_DEPLOYMENT_ID")
-    OPENAI_API_VERSION: str = os.getenv("OPENAI_API_VERSION", "gpt-4o")
-    # Default BATCH_SIZE set to 1; can be set to 10 via environment variable
+    OPENAI_API_BASE: str = os.getenv("OPENAI_API_BASE")
+    MODEL_ID: str = os.getenv("MODEL_ID")
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", 1))
     MAX_CONCURRENT_OCR_REQUESTS: int = int(os.getenv("MAX_CONCURRENT_OCR_REQUESTS", 5))
     MAX_CONCURRENT_PDF_CONVERSION: int = int(os.getenv("MAX_CONCURRENT_PDF_CONVERSION", 4))
@@ -35,31 +38,27 @@ class Settings:
     @classmethod
     def validate(cls):
         missing = [
-            var
-            for var in [
-                "OPENAI_API_KEY",
-                "AZURE_OPENAI_ENDPOINT",
-                "OPENAI_DEPLOYMENT_ID",
-            ]
+            var for var in ["OPENAI_API_KEY", "OPENAI_API_BASE", "MODEL_ID"]
             if not getattr(cls, var)
         ]
         if missing:
-            raise ValueError(
-                f"Missing required environment variables: {', '.join(missing)}"
-            )
+            raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
 
 Settings.validate()
 
 # Initialize OpenAI client
+from openai import OpenAI
+
+# Инициализация клиента OpenAI
 try:
-    openai_client = AsyncAzureOpenAI(
-        azure_endpoint=Settings.AZURE_OPENAI_ENDPOINT,
-        api_version=Settings.OPENAI_API_VERSION,
+    openai_client = OpenAI(
         api_key=Settings.OPENAI_API_KEY,
+        base_url=Settings.OPENAI_API_BASE
     )
 except Exception as e:
     raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
+
 
 # Initialize FastAPI Application
 app = FastAPI(
@@ -368,36 +367,22 @@ async def retry_with_backoff(
 class OCRService:
     def __init__(self):
         try:
-            self.client = AsyncAzureOpenAI(
-                azure_endpoint=Settings.AZURE_OPENAI_ENDPOINT,
-                api_version=Settings.OPENAI_API_VERSION,
+            self.client = OpenAI(
                 api_key=Settings.OPENAI_API_KEY,
+                base_url=Settings.OPENAI_API_BASE
             )
         except Exception as e:
             logger.exception(f"Failed to initialize OpenAI client: {e}")
             raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
 
     async def perform_ocr_on_batch(self, image_batch: List[Tuple[int, str]]) -> str:
-        """
-        Perform OCR on a batch of images using OpenAI's API with retry logic.
-
-        Args:
-            image_batch (List[Tuple[int, str]]): List of tuples containing page numbers and base64-encoded image URLs.
-
-        Returns:
-            str: Extracted text.
-
-        Raises:
-            HTTPException: If OCR fails after retries.
-        """
         async def ocr_request():
             try:
                 messages = self.build_ocr_messages(image_batch)
-                logger.info(
-                    f"Sending OCR request to OpenAI with {len(image_batch)} images."
-                )
+                logger.info(f"Sending OCR request to OpenAI with {len(image_batch)} images.")
+
                 response = await self.client.chat.completions.create(
-                    model=Settings.OPENAI_DEPLOYMENT_ID,
+                    model=Settings.MODEL_ID,
                     messages=messages,
                     temperature=0.1,
                     max_tokens=4000,
@@ -406,6 +391,7 @@ class OCRService:
                     presence_penalty=0,
                 )
                 return self.extract_text_from_response(response)
+
             except OpenAIError as e:
                 if "rate limit" in str(e).lower():
                     raise HTTPException(
