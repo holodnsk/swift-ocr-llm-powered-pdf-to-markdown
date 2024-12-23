@@ -25,6 +25,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 # # Дополнительные параметры
 # BATCH_SIZE=10
 # MAX_CONCURRENT_OCR_REQUESTS=5
+# MAX_CONCURRENT_PDF_CONVERSION=4
 
 
 class Settings:
